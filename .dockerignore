@@ -1,0 +1,9 @@
+.git
+.github
+.aws-setup
+bin
+out
+*.exe
+*.md
+config
+deploy

@@ -1,0 +1,3 @@
+resources:
+  - bases/apps.example.io_webapps.yaml
+  - bases/apps.example.io_batchjobs.yaml
