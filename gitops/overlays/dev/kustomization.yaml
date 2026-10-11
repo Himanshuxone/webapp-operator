@@ -13,4 +13,4 @@ images:
   # "controller" is the placeholder image name in config/manager/manager.yaml
   - name: controller
     newName: ghcr.io/himanshuxone/webapp-operator   # MUST be lowercase (GHCR requirement)
-    newTag: sha-0000000                              # CI replaces this line; keep the key "newTag:"
+    newTag: sha-c904dec
