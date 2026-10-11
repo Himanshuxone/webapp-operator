@@ -1,0 +1,29 @@
+# gitops/argocd/project.yaml
+# AppProject = a guardrail. It limits WHERE these apps may pull from and WHAT they may touch.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: webapp-platform
+  namespace: argocd
+spec:
+  description: WebApp operator and the WebApps it manages
+
+  sourceRepos:
+    - https://github.com/Himanshuxone/webapp-operator.git
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: webapp-operator-system
+    - server: https://kubernetes.default.svc
+      namespace: webapps-dev
+
+  # Cluster-scoped kinds these apps may create. Anything else is rejected.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding

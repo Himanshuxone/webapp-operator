@@ -1,0 +1,28 @@
+# gitops/argocd/operator-app.yaml
+# Application 1: the operator itself (CRDs + RBAC + controller Deployment).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: webapp-operator
+  namespace: argocd
+  annotations:
+    # Sync wave 0 = first. The workloads app (wave 1) waits until this app is Healthy,
+    # i.e. until the CRDs exist and the controller Deployment is Available.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: webapp-platform
+  source:
+    repoURL: https://github.com/Himanshuxone/webapp-operator.git
+    targetRevision: main
+    path: gitops/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: webapp-operator-system
+  syncPolicy:
+    automated:
+      prune: true      # resource removed from Git -> removed from the cluster
+      selfHeal: true   # someone edits the cluster by hand -> Argo puts it back
+    syncOptions:
+      # CRDs are large; client-side apply stores a copy in an annotation and fails past 256KB.
+      # Server-side apply avoids that and is the right default for CRDs.
+      - ServerSideApply=true

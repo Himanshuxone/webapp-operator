@@ -1,0 +1,9 @@
+# gitops/workloads/dev/webapp-hello.yaml
+apiVersion: apps.example.io/v1alpha1
+kind: WebApp
+metadata:
+  name: hello
+spec:
+  image: nginxdemos/hello:plain-text
+  replicas: 1
+  port: 80

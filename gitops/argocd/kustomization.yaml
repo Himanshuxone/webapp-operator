@@ -1,0 +1,7 @@
+# gitops/argocd/kustomization.yaml
+# The folder the ROOT Application watches ("app of apps").
+# Adding a new environment later = adding another Application file here.
+resources:
+  - project.yaml
+  - operator-app.yaml
+  - workloads-app.yaml

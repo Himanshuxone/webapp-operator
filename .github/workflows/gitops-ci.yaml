@@ -1,0 +1,204 @@
+# .github/workflows/gitops-ci.yaml
+#
+# CI half of the GitOps loop. It NEVER touches the cluster.
+#
+#   pull request  ->  test + validate manifests + end-to-end test in a throw-away kind cluster
+#   push to main  ->  all of the above, then build + push the image to GHCR,
+#                     then commit the new image tag into gitops/overlays/dev
+#
+# The CD half is Argo CD, running in your cluster: it sees that commit and syncs.
+#
+# NOTE: if you still have .github/workflows/ci-cd.yaml (the AWS/EC2 deploy from Part 2),
+# change its trigger to "workflow_dispatch" so both do not run on every push.
+
+name: gitops-ci
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+        # Skip runs caused by edits to the GitOps folder or docs (also stops the tag-bump \commit
+        # from re-triggering CI; commits made with GITHUB_TOKEN do not trigger workflows anyway).
+        paths-ignore:
+          - "gitops/**"
+          - "**.md"
+    workflow_dispatch:
+
+env:
+  # Run "controller-gen --version" locally and put the same version here.
+  CONTROLLER_GEN_VERSION: v0.18.0
+
+concurrency:
+  group: gitops-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    
+jobs:
+    # ------------------------------------------------------------------ 1. unit-level checks
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: actions/setup-go@v5
+          with:
+              go-version-file: go.mod
+              cache: true
+        - name: Install controller-gen
+          run: |
+              go install sigs.k8s.io/controller-tools/cmd/controller-gen@${CONTROLLER_GEN_VERSION}
+              echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+        # If you changed api/v1alpha1/*.go but forgot to regenerate the CRD, Argo would deploy a
+        # stale CRD. This step fails the build instead.
+        - name: Generated files are committed and up to date
+          run: |
+            controller-gen object paths=./api/v1alpha1
+            controller-gen crd paths=./api/v1alpha1 output:crd:artifacts:config=config/crd/bases
+            controller-gen rbac:roleName=webapp-manager-role paths=./internal/controller output:rbac:artifacts:config=config/rbac
+            if [ -n "$(git status --porcelain)" ]; then
+                echo "::error::Generated files differ from what is committed. Run controller-gen locally and commit."
+                git status --porcelain
+                git diff
+                exit 1
+            fi
+        - run: go build ./...
+        - run: go vet ./...
+        - run: go test ./internal/controller -run TestComputePhase -v
+    
+    # ------------------------------------------------------------------ 2. do the manifests render
+    manifests:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - name: Render every kustomization
+          run: |
+            set -e
+            for d in gitops/overlays/dev gitops/overlays/e2e gitops/workloads/dev gitops/argocd; do
+              echo "== kubectl kustomize $d"
+              kubectl kustomize "$d" > /dev/null
+            done
+        - name: Dev overlay uses the GHCR image and a pinned tag
+          run: |
+            expected="ghcr.io/${GITHUB_REPOSITORY,,}"
+            grep -q "newName: ${expected}" gitops/overlays/dev/kustomization.yaml \
+              || { echo "::error::newName in gitops/overlays/dev must be ${expected}"; exit 1; }
+            if grep -q "newTag: latest" gitops/overlays/dev/kustomization.yaml; then
+              echo "::error::Do not deploy :latest. Git must say exactly which build runs."; exit 1
+            fi
+  # ------------------------------------------------------------------ 3. real cluster test
+  # Builds the image, loads it into a disposable kind cluster, installs the operator exactly the
+  # way Argo would (same kustomize files), applies the SAME WebApp YAML that Argo will apply,
+  # and checks that the operator really creates and scales the Deployment.
+  e2e:
+    needs: [test, manifests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Go version from go.mod
+        id: gov
+        run: echo "v=$(grep -E '^go [0-9.]+' go.mod | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Build operator image
+        run: docker build --build-arg GO_VERSION=${{ steps.gov.outputs.v }} -t webapp-operator:e2e .
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: e2e
+
+      - name: Load image into kind
+        run: kind load docker-image webapp-operator:e2e --name e2e
+
+      - name: Install the operator (same manifests Argo uses)
+        run: |
+          kubectl apply --server-side -k gitops/overlays/e2e
+          kubectl -n webapp-operator-system rollout status deploy/controller-manager --timeout=120s
+
+      # Catches a bad edit in Git before Argo ever sees it, for example replicas: -1
+      # (rejected by the CRD schema's Minimum=0) or a misspelt field.
+      - name: Server-side validate the WebApps against the real CRD
+        run: |
+          kubectl create namespace webapps-dev
+          kubectl apply --server-side --dry-run=server -k gitops/workloads/dev
+
+      - name: Apply the WebApps and wait for the operator to reconcile them
+        run: |
+          kubectl apply --server-side -k gitops/workloads/dev
+          kubectl -n webapps-dev wait --for=condition=Available deploy/demo --timeout=180s
+          kubectl -n webapps-dev wait --for=condition=Available deploy/hello --timeout=180s
+
+      - name: Scale through the CRD and check the operator follows
+        run: |
+          kubectl -n webapps-dev patch webapp demo --type merge -p '{"spec":{"replicas":3}}'
+          kubectl -n webapps-dev rollout status deploy/demo --timeout=120s
+          test "$(kubectl -n webapps-dev get deploy demo -o jsonpath='{.status.readyReplicas}')" = "3"
+
+      - name: Delete a WebApp and check the finalizer lets it go
+        run: |
+          kubectl -n webapps-dev delete webapp hello --timeout=60s
+          # The Deployment has an ownerReference to the WebApp, so Kubernetes garbage-collects it.
+          kubectl -n webapps-dev wait --for=delete deploy/hello --timeout=60s
+
+      - name: Debug output on failure
+        if: failure()
+        run: |
+          kubectl get all,webapps -A || true
+          kubectl -n webapp-operator-system logs deploy/controller-manager --tail=200 || true
+
+          
+  # ------------------------------------------------------------------ 4. publish + promote (main only)
+  # "Promote" = write the new image tag into Git. Argo CD does the rest.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # to commit the new tag
+      packages: write    # to push to ghcr.io
+    # Never run two promotions at once: they would race on the same file.
+    concurrency:
+      group: promote-dev
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image name and tag
+        id: meta
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "gov=$(grep -E '^go [0-9.]+' go.mod | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          build-args: GO_VERSION=${{ steps.meta.outputs.gov }}
+          # Links the package to this repo so it inherits the repo's visibility.
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Commit the new tag to the GitOps overlay
+        run: |
+          set -e
+          f=gitops/overlays/dev/kustomization.yaml
+          sed -i "s|^\(\s*newTag:\).*|\1 ${{ steps.meta.outputs.tag }}|" "$f"
+          git diff --stat
+          if git diff --quiet; then echo "Tag unchanged, nothing to commit"; exit 0; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$f"
+          git commit -m "deploy: webapp-operator ${{ steps.meta.outputs.tag }} [skip ci]"
+          # Another merge may have landed while we were building.
+          git pull --rebase origin main
+          git push origin HEAD:main

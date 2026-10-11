@@ -1,0 +1,10 @@
+# gitops/workloads/dev/kustomization.yaml
+# The WebApp custom resources for the dev environment. THIS is the folder you edit
+# to test GitOps: change a replica count, push, and watch the cluster follow.
+
+namespace: webapps-dev
+
+resources:
+  - namespace.yaml
+  - webapp-demo.yaml
+  - webapp-hello.yaml

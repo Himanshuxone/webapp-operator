@@ -1,0 +1,16 @@
+# gitops/overlays/dev/kustomization.yaml
+#
+# This is the file Argo CD watches for the operator ("webapp-operator" Application).
+# GitHub Actions rewrites ONLY the newTag line after each successful build, then commits.
+# That commit is the "deployment": Git is the record of what runs in the cluster.
+#
+# Do not hand-edit newTag unless you are rolling back (see the README).
+
+resources:
+  - ../../base
+
+images:
+  # "controller" is the placeholder image name in config/manager/manager.yaml
+  - name: controller
+    newName: ghcr.io/himanshuxone/webapp-operator   # MUST be lowercase (GHCR requirement)
+    newTag: sha-0000000                              # CI replaces this line; keep the key "newTag:"

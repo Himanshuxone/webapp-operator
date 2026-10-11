@@ -1,0 +1,31 @@
+# gitops/argocd/workloads-app.yaml
+# Application 2: the WebApp custom resources (what users would normally ask for).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: webapps-dev
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: webapp-platform
+  source:
+    repoURL: https://github.com/Himanshuxone/webapp-operator.git
+    targetRevision: main
+    path: gitops/workloads/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: webapps-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Safety net: if the WebApp CRD is not registered yet, don't fail the dry run; retry.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m

@@ -1,0 +1,11 @@
+# gitops/workloads/dev/webapp-demo.yaml
+# A WebApp custom resource. The operator turns this into a Deployment named "demo".
+# Fields come from api/v1alpha1/webapp_types.go: image (required), replicas, port.
+apiVersion: apps.example.io/v1alpha1
+kind: WebApp
+metadata:
+  name: demo
+spec:
+  image: nginx:1.27
+  replicas: 2
+  port: 80

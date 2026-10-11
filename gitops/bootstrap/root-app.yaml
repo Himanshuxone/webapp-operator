@@ -1,0 +1,21 @@
+# gitops/bootstrap/root-app.yaml
+# The ONE thing applied by hand (by scripts/bootstrap.ps1). Everything else is pulled from Git.
+# It watches gitops/argocd/, which contains the AppProject and the two child Applications.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Himanshuxone/webapp-operator.git
+    targetRevision: main
+    path: gitops/argocd
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -1,0 +1,11 @@
+# gitops/overlays/e2e/kustomization.yaml
+# Used ONLY by the GitHub Actions end-to-end job. The image is built in the job and loaded
+# straight into a throw-away kind cluster, so it never touches a registry.
+
+resources:
+  - ../../base
+
+images:
+  - name: controller
+    newName: webapp-operator
+    newTag: e2e
