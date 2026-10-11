@@ -1,20 +1,11 @@
-# gitops/base/kustomization.yaml
-#
-# The "base" is everything that is the same in every environment: your existing
-# kustomize entry point (config/default = namespace + CRDs + RBAC + manager Deployment).
-# Overlays (dev, e2e) only change the container image.
-#
-# We REUSE config/default instead of copying it, so there is one source of truth.
-# Kustomize allows referencing a directory outside this folder as long as it is a
-# directory with its own kustomization.yaml (only individual files outside are blocked).
+namespace: webapp-operator-system
 
 resources:
-  - ../../config
+  - namespace.yaml
+  - ../../config/crd
+  - ../../config/rbac
+  - ../../config/manager
 
-# Safety net for Argo CD: never delete the CRDs.
-#   Prune=false  -> if a CRD file disappears from Git, Argo will NOT delete it
-#   Delete=false -> if the Argo Application is deleted, the CRDs stay
-# Deleting a CRD deletes EVERY WebApp and BatchJob in the cluster, so we require a human to do it.
 patches:
   - target:
       kind: CustomResourceDefinition
