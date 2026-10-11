@@ -29,7 +29,7 @@ permissions:
 
 env:
   # Run "controller-gen --version" locally and put the same version here.
-  CONTROLLER_GEN_VERSION: v0.18.0
+  CONTROLLER_GEN_VERSION: v0.22.0
 
 concurrency:
   group: gitops-ci-${{ github.ref }}
