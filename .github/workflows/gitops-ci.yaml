@@ -14,15 +14,18 @@
 name: gitops-ci
 
 on:
-    pull_request:
-    push:
-        branches: [main]
-        # Skip runs caused by edits to the GitOps folder or docs (also stops the tag-bump \commit
-        # from re-triggering CI; commits made with GITHUB_TOKEN do not trigger workflows anyway).
-        paths-ignore:
-          - "gitops/**"
-          - "**.md"
-    workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+    # Skip runs caused by edits to the GitOps folder or docs (also stops the tag-bump commit
+    # from re-triggering CI; commits made with GITHUB_TOKEN do not trigger workflows anyway).
+    paths-ignore:
+      - "gitops/**"
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   # Run "controller-gen --version" locally and put the same version here.
@@ -31,60 +34,63 @@ env:
 concurrency:
   group: gitops-ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    
+
 jobs:
-    # ------------------------------------------------------------------ 1. unit-level checks
-    test:
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
+  # ------------------------------------------------------------------ 1. unit-level checks
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-        - uses: actions/setup-go@v5
-          with:
-              go-version-file: go.mod
-              cache: true
-        - name: Install controller-gen
-          run: |
-              go install sigs.k8s.io/controller-tools/cmd/controller-gen@${CONTROLLER_GEN_VERSION}
-              echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-        # If you changed api/v1alpha1/*.go but forgot to regenerate the CRD, Argo would deploy a
-        # stale CRD. This step fails the build instead.
-        - name: Generated files are committed and up to date
-          run: |
-            controller-gen object paths=./api/v1alpha1
-            controller-gen crd paths=./api/v1alpha1 output:crd:artifacts:config=config/crd/bases
-            controller-gen rbac:roleName=webapp-manager-role paths=./internal/controller output:rbac:artifacts:config=config/rbac
-            if [ -n "$(git status --porcelain)" ]; then
-                echo "::error::Generated files differ from what is committed. Run controller-gen locally and commit."
-                git status --porcelain
-                git diff
-                exit 1
-            fi
-        - run: go build ./...
-        - run: go vet ./...
-        - run: go test ./internal/controller -run TestComputePhase -v
-    
-    # ------------------------------------------------------------------ 2. do the manifests render
-    manifests:
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
-        - name: Render every kustomization
-          run: |
-            set -e
-            for d in gitops/overlays/dev gitops/overlays/e2e gitops/workloads/dev gitops/argocd; do
-              echo "== kubectl kustomize $d"
-              kubectl kustomize "$d" > /dev/null
-            done
-        - name: Dev overlay uses the GHCR image and a pinned tag
-          run: |
-            expected="ghcr.io/${GITHUB_REPOSITORY,,}"
-            grep -q "newName: ${expected}" gitops/overlays/dev/kustomization.yaml \
-              || { echo "::error::newName in gitops/overlays/dev must be ${expected}"; exit 1; }
-            if grep -q "newTag: latest" gitops/overlays/dev/kustomization.yaml; then
-              echo "::error::Do not deploy :latest. Git must say exactly which build runs."; exit 1
-            fi
+      - name: Install controller-gen
+        run: |
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@${CONTROLLER_GEN_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # If you changed api/v1alpha1/*.go but forgot to regenerate the CRD, Argo would deploy a
+      # stale CRD. This step fails the build instead.
+      - name: Generated files are committed and up to date
+        run: |
+          controller-gen object paths=./api/v1alpha1
+          controller-gen crd paths=./api/v1alpha1 output:crd:artifacts:config=config/crd/bases
+          controller-gen rbac:roleName=webapp-manager-role paths=./internal/controller output:rbac:artifacts:config=config/rbac
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Generated files differ from what is committed. Run controller-gen locally and commit."
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./internal/controller -run TestComputePhase -v
+
+  # ------------------------------------------------------------------ 2. do the manifests render?
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render every kustomization
+        run: |
+          set -e
+          for d in gitops/overlays/dev gitops/overlays/e2e gitops/workloads/dev gitops/argocd; do
+            echo "== kubectl kustomize $d"
+            kubectl kustomize "$d" > /dev/null
+          done
+      - name: Dev overlay uses the GHCR image and a pinned tag
+        run: |
+          expected="ghcr.io/${GITHUB_REPOSITORY,,}"
+          grep -q "newName: ${expected}" gitops/overlays/dev/kustomization.yaml \
+            || { echo "::error::newName in gitops/overlays/dev must be ${expected}"; exit 1; }
+          if grep -q "newTag: latest" gitops/overlays/dev/kustomization.yaml; then
+            echo "::error::Do not deploy :latest. Git must say exactly which build runs."; exit 1
+          fi
+
   # ------------------------------------------------------------------ 3. real cluster test
   # Builds the image, loads it into a disposable kind cluster, installs the operator exactly the
   # way Argo would (same kustomize files), applies the SAME WebApp YAML that Argo will apply,
@@ -145,7 +151,6 @@ jobs:
           kubectl get all,webapps -A || true
           kubectl -n webapp-operator-system logs deploy/controller-manager --tail=200 || true
 
-          
   # ------------------------------------------------------------------ 4. publish + promote (main only)
   # "Promote" = write the new image tag into Git. Argo CD does the rest.
   publish:
