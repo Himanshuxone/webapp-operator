@@ -20,7 +20,6 @@ on:
     # Skip runs caused by edits to the GitOps folder or docs (also stops the tag-bump commit
     # from re-triggering CI; commits made with GITHUB_TOKEN do not trigger workflows anyway).
     paths-ignore:
-      - "gitops/**"
       - "**.md"
   workflow_dispatch:
 
